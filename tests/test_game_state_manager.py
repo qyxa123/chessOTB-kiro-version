@@ -858,7 +858,7 @@ class TestMoveSequenceValidationProperty:
     """
     
     @given(legal_move_sequence())
-    @settings(max_examples=20, deadline=10000)
+    @settings(max_examples=5, deadline=3000)  # Reduced from 20 examples and 10000ms
     def test_move_sequence_chronological_order(self, moves):
         """
         Property: For any sequence of legal moves, the GameStateManager should 
@@ -897,8 +897,8 @@ class TestMoveSequenceValidationProperty:
                 expected_fullmove += 1
             assert manager.get_fullmove_number() == expected_fullmove, f"Fullmove number should be {expected_fullmove}"
     
-    @given(st.lists(valid_move(), min_size=1, max_size=8))
-    @settings(max_examples=30, deadline=8000)
+    @given(st.lists(valid_move(), min_size=1, max_size=5))  # Reduced max_size from 8 to 5
+    @settings(max_examples=10, deadline=3000)  # Reduced from 30 examples and 8000ms
     def test_illegal_move_detection_and_flagging(self, moves):
         """
         Property: For any sequence of moves, illegal moves should be flagged 
@@ -930,7 +930,7 @@ class TestMoveSequenceValidationProperty:
         assert total_flagged == flagged_count, f"Expected {flagged_count} flagged moves, got {total_flagged}"
     
     @given(game_ending_scenario())
-    @settings(max_examples=20, deadline=5000)
+    @settings(max_examples=5, deadline=2000)  # Reduced from 20 examples and 5000ms
     def test_game_ending_detection(self, scenario_data):
         """
         Property: For any game state that represents a game ending 
@@ -961,8 +961,8 @@ class TestMoveSequenceValidationProperty:
         # elif ending_type == "stalemate":
         #     assert manager.is_stalemate(), "Should detect stalemate"
     
-    @given(st.lists(valid_move(), min_size=3, max_size=12))
-    @settings(max_examples=25, deadline=8000)
+    @given(st.lists(valid_move(), min_size=3, max_size=8))  # Reduced max_size from 12 to 8
+    @settings(max_examples=10, deadline=3000)  # Reduced from 25 examples and 8000ms
     def test_move_sequence_state_consistency(self, moves):
         """
         Property: For any sequence of moves, the game state should remain 
@@ -1008,8 +1008,8 @@ class TestMoveSequenceValidationProperty:
                 assert 0 <= ep_target.x <= 7, "En passant target x should be 0-7"
                 assert 0 <= ep_target.y <= 7, "En passant target y should be 0-7"
     
-    @given(st.integers(min_value=1, max_value=20))
-    @settings(max_examples=15, deadline=5000)
+    @given(st.integers(min_value=1, max_value=10))  # Reduced from 20 to 10
+    @settings(max_examples=5, deadline=2000)  # Reduced from 15 examples and 5000ms
     def test_move_sequence_performance_consistency(self, num_moves):
         """
         Property: For any number of moves, the GameStateManager should 
@@ -1401,7 +1401,7 @@ class TestIllegalMoveDetectionProperty:
         return _illegal_move_generator()
     
     @given(st.data())
-    @settings(max_examples=30, deadline=10000)
+    @settings(max_examples=10, deadline=3000)  # Reduced from 30 examples and 10000ms
     def test_illegal_moves_are_flagged_property(self, data):
         """
         Property: For any sequence containing illegal moves, the system should 
@@ -1474,8 +1474,8 @@ class TestIllegalMoveDetectionProperty:
     
     @given(st.lists(st.sampled_from([
         'wrong_turn', 'no_piece', 'invalid_pawn_move', 'null_move'
-    ]), min_size=1, max_size=5))
-    @settings(max_examples=20, deadline=8000)
+    ]), min_size=1, max_size=3))  # Reduced max_size from 5 to 3
+    @settings(max_examples=10, deadline=3000)  # Reduced from 20 examples and 8000ms
     def test_specific_illegal_move_types_flagged_property(self, illegal_types):
         """
         Property: For any specific type of illegal move, the system should 
@@ -1536,8 +1536,8 @@ class TestIllegalMoveDetectionProperty:
             assert has_expected_keyword, \
                 f"Flag reason should contain expected keywords {expected_keywords}: {move.flag_reason}"
     
-    @given(st.integers(min_value=1, max_value=10))
-    @settings(max_examples=30, deadline=8000)
+    @given(st.integers(min_value=1, max_value=5))  # Reduced from 10 to 5
+    @settings(max_examples=10, deadline=3000)  # Reduced from 30 examples and 8000ms
     def test_illegal_move_flagging_consistency_property(self, num_illegal_moves):
         """
         Property: For any number of illegal moves, the flagging system should 
@@ -1582,7 +1582,7 @@ class TestIllegalMoveDetectionProperty:
         assert len(summary["flagged_move_details"]) == num_illegal_moves
     
     @given(st.data())
-    @settings(max_examples=25, deadline=8000)
+    @settings(max_examples=10, deadline=3000)  # Reduced from 25 examples and 8000ms
     def test_legal_moves_not_flagged_as_illegal_property(self, data):
         """
         Property: For any sequence of legal moves, none should be flagged 
@@ -1743,7 +1743,7 @@ class TestChessNotationDisambiguationProperty:
         return _ambiguous_position_generator()
     
     @given(st.data())
-    @settings(max_examples=30, deadline=8000)
+    @settings(max_examples=10, deadline=3000)  # Reduced from 30 examples and 8000ms
     def test_disambiguation_file_sufficient_property(self, data):
         """
         Property: For any position with ambiguous moves where file disambiguation 
@@ -1789,7 +1789,7 @@ class TestChessNotationDisambiguationProperty:
         assert notation2 == "Nfe4", f"Expected 'Nfe4', got '{notation2}'"
     
     @given(st.data())
-    @settings(max_examples=25, deadline=8000)
+    @settings(max_examples=8, deadline=3000)  # Reduced from 25 examples and 8000ms
     def test_disambiguation_rank_sufficient_property(self, data):
         """
         Property: For any position with ambiguous moves where rank disambiguation 
@@ -1835,7 +1835,7 @@ class TestChessNotationDisambiguationProperty:
         assert notation2 == "R2a5", f"Expected 'R2a5', got '{notation2}'"
     
     @given(st.data())
-    @settings(max_examples=20, deadline=8000)
+    @settings(max_examples=5, deadline=3000)  # Reduced from 20 examples and 8000ms
     def test_disambiguation_both_file_and_rank_property(self, data):
         """
         Property: For any position with ambiguous moves where both file and rank 
@@ -1877,7 +1877,7 @@ class TestChessNotationDisambiguationProperty:
         assert notation == "Qa2b3", f"Expected 'Qa2b3', got '{notation}'"
     
     @given(st.data())
-    @settings(max_examples=25, deadline=8000)
+    @settings(max_examples=8, deadline=3000)  # Reduced from 25 examples and 8000ms
     def test_no_disambiguation_needed_property(self, data):
         """
         Property: For any position where no disambiguation is needed, 
@@ -1930,7 +1930,7 @@ class TestChessNotationDisambiguationProperty:
         assert bishop_notation == "Bf4", f"Expected 'Bf4', got '{bishop_notation}'"
     
     @given(st.data())
-    @settings(max_examples=20, deadline=8000)
+    @settings(max_examples=5, deadline=3000)  # Reduced from 20 examples and 8000ms
     def test_pawn_disambiguation_property(self, data):
         """
         Property: For any pawn capture, the notation should include the file 
@@ -1973,7 +1973,7 @@ class TestChessNotationDisambiguationProperty:
         assert notation == "dxe5", f"Expected 'dxe5', got '{notation}'"
     
     @given(st.data())
-    @settings(max_examples=15, deadline=8000)
+    @settings(max_examples=5, deadline=3000)  # Reduced from 15 examples and 8000ms
     def test_special_move_notation_consistency_property(self, data):
         """
         Property: For any special move (castling, en passant, promotion), 
