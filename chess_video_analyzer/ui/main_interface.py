@@ -725,24 +725,39 @@ class MainInterface:
         if not self.processing_results.game_state:
             return
         
-        # Configure text tags for highlighting
-        self.moves_text.tag_configure("flagged", background="yellow", foreground="red")
-        self.moves_text.tag_configure("normal", background="white", foreground="black")
-        
-        # Clear existing tags
-        self.moves_text.tag_remove("flagged", 1.0, tk.END)
-        self.moves_text.tag_remove("normal", 1.0, tk.END)
-        
-        # Get current text content
-        content = self.moves_text.get(1.0, tk.END)
-        lines = content.split('\n')
-        
-        # Highlight flagged moves
-        for i, move in enumerate(self.processing_results.game_state.move_history):
-            if move.is_flagged and i < len(lines):
-                line_start = f"{i + 1}.0"
-                line_end = f"{i + 1}.end"
-                self.moves_text.tag_add("flagged", line_start, line_end)
+        try:
+            # Configure text tags for highlighting
+            self.moves_text.tag_configure("flagged", background="yellow", foreground="red")
+            self.moves_text.tag_configure("normal", background="white", foreground="black")
+            
+            # Clear existing tags
+            self.moves_text.tag_remove("flagged", 1.0, tk.END)
+            self.moves_text.tag_remove("normal", 1.0, tk.END)
+            
+            # Get current text content
+            content = self.moves_text.get(1.0, tk.END).strip()
+            if not content:
+                return
+                
+            lines = content.split('\n')
+            
+            # Highlight flagged moves - limit to reasonable number to avoid performance issues
+            max_moves_to_highlight = min(len(self.processing_results.game_state.move_history), 100)
+            
+            for i in range(max_moves_to_highlight):
+                move = self.processing_results.game_state.move_history[i]
+                if hasattr(move, 'is_flagged') and move.is_flagged and i < len(lines):
+                    line_start = f"{i + 1}.0"
+                    line_end = f"{i + 1}.end"
+                    try:
+                        self.moves_text.tag_add("flagged", line_start, line_end)
+                    except tk.TclError:
+                        # Skip if line doesn't exist
+                        continue
+        except Exception as e:
+            # Log error but don't crash the UI
+            self.logger.warning(f"Error highlighting moves: {e}")
+            pass
     
     def add_export_options_menu(self):
         """Add advanced export options menu."""
