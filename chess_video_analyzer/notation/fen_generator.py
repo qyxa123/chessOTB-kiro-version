@@ -121,13 +121,14 @@ class FENGenerator:
         fen_rows = []
         
         # Process each rank from 8 to 1 (y coordinates 0 to 7)
-        for rank in range(8):
+        for rank_number in range(8, 0, -1):  # Rank 8 to 1
+            y = 8 - rank_number  # Convert rank to y-coordinate (rank 8 = y=0, rank 1 = y=7)
             row_string = ""
             empty_count = 0
             
             # Process each file from a to h (x coordinates 0 to 7)
             for file in range(8):
-                position = Position(file, rank)
+                position = Position(file, y)
                 piece = board_state.squares.get(position)
                 
                 if piece is None:

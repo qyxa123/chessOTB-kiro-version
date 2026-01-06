@@ -246,8 +246,8 @@ class PieceRecognizer:
             if piece_color is None:
                 return None
             
-            # Determine piece type
-            piece_kind = self._classify_piece_type(square_image, piece_color)
+            # Determine piece type using improved heuristics
+            piece_kind = self._classify_piece_type_improved(square_image, piece_color)
             if piece_kind is None:
                 return None
             
@@ -270,18 +270,20 @@ class PieceRecognizer:
             mean_intensity = np.mean(gray)
             std_intensity = np.std(gray)
             
-            # Check for sufficient variation (pieces create intensity variation)
-            if std_intensity < 15:  # Very uniform - likely empty
+            # More strict thresholds to reduce false positives, but not too strict
+            if std_intensity < 20:  # Reduced from 25 - balance between strict and functional
                 return False
             
             # Check for circular/blob-like features (typical of pieces)
-            # Use blob detection
+            # Use blob detection with stricter parameters
             params = cv2.SimpleBlobDetector_Params()
             params.filterByArea = True
-            params.minArea = 50
+            params.minArea = 100  # Increased minimum area
             params.maxArea = 2000
             params.filterByCircularity = True
-            params.minCircularity = 0.3
+            params.minCircularity = 0.3  # Reduced back to be less strict
+            params.filterByConvexity = True
+            params.minConvexity = 0.5
             
             detector = cv2.SimpleBlobDetector_create(params)
             keypoints = detector.detect(gray)
@@ -290,12 +292,12 @@ class PieceRecognizer:
             if len(keypoints) > 0:
                 return True
             
-            # Fallback: check for edge density
+            # Fallback: check for edge density with higher threshold
             edges = cv2.Canny(gray, 50, 150)
             edge_density = np.sum(edges > 0) / edges.size
             
-            # High edge density suggests a piece
-            return edge_density > self.params.empty_square_threshold
+            # Balanced edge density threshold to reduce false positives but still detect pieces
+            return edge_density > (self.params.empty_square_threshold * 1.2)
             
         except Exception as e:
             logging.warning(f"Piece detection failed: {e}")
@@ -312,33 +314,54 @@ class PieceRecognizer:
                 
                 # Get the central region (where piece is likely to be)
                 h, w = gray.shape
-                center_region = gray[h//4:3*h//4, w//4:3*w//4]
+                center_region = gray[h//3:2*h//3, w//3:2*w//3]  # More focused center region
                 
                 if center_region.size == 0:
                     center_region = gray
                 
                 mean_intensity = np.mean(center_region)
                 
-                # Simple threshold-based classification
-                # This is a simplified approach - real implementation would use trained models
-                if mean_intensity > 140:  # Bright pieces
+                # More sophisticated color classification
+                # Use histogram analysis for better color detection
+                hist = cv2.calcHist([center_region], [0], None, [256], [0, 256])
+                
+                # Find the dominant intensity range
+                peak_intensity = np.argmax(hist)
+                
+                # Combine mean intensity and peak intensity for better classification
+                combined_score = (mean_intensity * 0.7) + (peak_intensity * 0.3)
+                
+                # More conservative thresholds to reduce misclassification
+                if combined_score > 160:  # Very bright - definitely white
                     return Color.WHITE
-                elif mean_intensity < 100:  # Dark pieces
+                elif combined_score < 80:  # Very dark - definitely black
                     return Color.BLACK
                 else:
-                    # Medium intensity - use additional features
-                    # Check value channel in HSV
+                    # Medium intensity - use additional analysis
+                    # Check value channel in HSV for better discrimination
                     v_channel = hsv[:, :, 2]
-                    center_v = v_channel[h//4:3*h//4, w//4:3*w//4]
+                    center_v = v_channel[h//3:2*h//3, w//3:2*w//3]
                     if center_v.size > 0:
                         mean_v = np.mean(center_v)
-                        return Color.WHITE if mean_v > 120 else Color.BLACK
+                        # More conservative HSV-based classification
+                        if mean_v > 140:
+                            return Color.WHITE
+                        elif mean_v < 100:
+                            return Color.BLACK
+                        else:
+                            # Still ambiguous - return None to indicate uncertainty
+                            return None
                     else:
-                        return Color.WHITE if mean_intensity > 120 else Color.BLACK
+                        return None  # Unable to determine color
             else:
-                # Grayscale image
+                # Grayscale image - use more conservative thresholds
                 mean_intensity = np.mean(square_image)
-                return Color.WHITE if mean_intensity > 120 else Color.BLACK
+                if mean_intensity > 150:
+                    return Color.WHITE
+                elif mean_intensity < 90:
+                    return Color.BLACK
+                else:
+                    return None  # Uncertain
                 
         except Exception as e:
             logging.warning(f"Color classification failed: {e}")
@@ -414,6 +437,97 @@ class PieceRecognizer:
             # Return a random piece type based on image hash for consistency
             image_hash = abs(hash(square_image.tobytes())) % 6
             return list(PieceKind)[image_hash]
+    
+    def _classify_piece_type_improved(self, square_image: np.ndarray, piece_color: Color) -> Optional[PieceKind]:
+        """
+        Improved piece type classification using multiple features.
+        
+        This replaces the random hash-based classification with more reliable heuristics.
+        """
+        try:
+            # Convert to grayscale for shape analysis
+            if len(square_image.shape) == 3:
+                gray = cv2.cvtColor(square_image, cv2.COLOR_BGR2GRAY)
+            else:
+                gray = square_image
+            
+            # Apply threshold to get binary image
+            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            
+            # Find contours
+            contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if not contours:
+                return PieceKind.PAWN  # Default fallback
+            
+            # Find largest contour (main piece shape)
+            main_contour = max(contours, key=cv2.contourArea)
+            
+            # Calculate shape properties
+            area = cv2.contourArea(main_contour)
+            perimeter = cv2.arcLength(main_contour, True)
+            
+            if perimeter == 0:
+                return PieceKind.PAWN
+            
+            # Shape metrics
+            circularity = 4 * np.pi * area / (perimeter * perimeter)
+            
+            # Bounding rectangle
+            x, y, w, h = cv2.boundingRect(main_contour)
+            aspect_ratio = float(w) / h if h > 0 else 1.0
+            
+            # Convex hull analysis
+            hull = cv2.convexHull(main_contour)
+            hull_area = cv2.contourArea(hull)
+            solidity = area / hull_area if hull_area > 0 else 0
+            
+            # Height analysis (pieces have different height profiles)
+            height_ratio = h / gray.shape[0] if gray.shape[0] > 0 else 0
+            
+            # More realistic classification - most pieces in opening are pawns
+            # Pawn: Most common piece, relatively simple shape
+            if (area < 800 and height_ratio < 0.8 and 
+                circularity > 0.3 and solidity > 0.6):
+                return PieceKind.PAWN
+            
+            # Knight: Irregular shape, moderate size, distinctive profile
+            elif (circularity < 0.4 and solidity < 0.7 and 
+                  area > 200 and area < 900 and aspect_ratio > 0.6):
+                return PieceKind.KNIGHT
+            
+            # Rook: Rectangular, moderate size, high solidity
+            elif (aspect_ratio > 0.7 and aspect_ratio < 1.3 and 
+                  circularity < 0.5 and solidity > 0.8 and
+                  area > 300 and area < 800):
+                return PieceKind.ROOK
+            
+            # Bishop: Tall, pointed top, moderate circularity
+            elif (height_ratio > 0.7 and circularity > 0.4 and circularity < 0.7 and 
+                  area > 250 and area < 700):
+                return PieceKind.BISHOP
+            
+            # Queen: Large, complex shape, very tall
+            elif (area > 600 and height_ratio > 0.8):
+                return PieceKind.QUEEN
+            
+            # King: Large, complex shape, tall, distinctive crown
+            elif (area > 500 and height_ratio > 0.75 and 
+                  circularity < 0.6 and solidity < 0.8):
+                return PieceKind.KING
+            
+            # Default classification based on size - favor pawns for smaller pieces
+            elif area < 400:
+                return PieceKind.PAWN
+            elif area < 600:
+                return PieceKind.KNIGHT  # Medium pieces likely knights in opening
+            else:
+                return PieceKind.QUEEN  # Large pieces
+            
+        except Exception as e:
+            logging.warning(f"Improved piece type classification failed: {e}")
+            # Fallback to pawn instead of random - most pieces in opening are pawns
+            return PieceKind.PAWN
     
     def _extract_piece_features(self, gray_image: np.ndarray, color_image: np.ndarray) -> Dict:
         """Extract features from piece image for classification."""

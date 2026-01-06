@@ -198,10 +198,21 @@ class MainInterface:
         self.status_label = ttk.Label(progress_frame, textvariable=self.status_var)
         self.status_label.grid(row=1, column=0, sticky=tk.W)
         
+        # Progress percentage label
+        self.percentage_var = tk.StringVar(value="0%")
+        self.percentage_label = ttk.Label(progress_frame, textvariable=self.percentage_var)
+        self.percentage_label.grid(row=1, column=0, sticky=tk.E)
+        
         # Estimated time label
         self.time_var = tk.StringVar()
         self.time_label = ttk.Label(progress_frame, textvariable=self.time_var)
         self.time_label.grid(row=2, column=0, sticky=tk.W)
+        
+        # Processing details label (for current step info)
+        self.details_var = tk.StringVar()
+        self.details_label = ttk.Label(progress_frame, textvariable=self.details_var, 
+                                      font=('TkDefaultFont', 8))
+        self.details_label.grid(row=3, column=0, sticky=tk.W)
     
     def _setup_results_section(self, parent):
         """Set up the results display section."""
@@ -363,6 +374,9 @@ class MainInterface:
         if not self.current_video_path or self.is_processing:
             return
         
+        # Reset progress display
+        self._reset_progress_display()
+        
         self.is_processing = True
         self.process_button.config(state="disabled")
         self.cancel_button.config(state="normal")
@@ -379,6 +393,18 @@ class MainInterface:
         )
         processing_thread.start()
     
+    def _reset_progress_display(self):
+        """Reset all progress display elements."""
+        self.progress_var.set(0)
+        self.percentage_var.set("0%")
+        self.status_var.set("Starting processing...")
+        self.time_var.set("")
+        self.details_var.set("Preparing to process video...")
+        
+        # Clear any previous timing data
+        if hasattr(self, '_processing_start_time'):
+            delattr(self, '_processing_start_time')
+    
     def _process_video_thread(self, video_path: str, progress_callback: ProgressCallback):
         """
         Process video in a separate thread.
@@ -388,39 +414,31 @@ class MainInterface:
             progress_callback: Callback for progress updates
         """
         try:
-            start_time = datetime.now()
+            progress_callback.update("Initializing...", 0.0)
             
-            # This is a placeholder for the actual processing pipeline
-            # In a complete implementation, this would orchestrate all components
+            from ..main import ChessVideoAnalyzer
             
-            progress_callback.update("Initializing processing...", 0.0)
+            # Initialize analyzer with progress callback
+            analyzer = ChessVideoAnalyzer(enable_ui=False)
+            analyzer.set_progress_callback(progress_callback.update)
             
-            # Simulate processing steps
-            import time
+            progress_callback.update("Loading video...", 0.1)
             
-            progress_callback.update("Extracting frames...", 0.1)
-            time.sleep(0.5)  # Simulate work
+            # Load video
+            video_metadata = analyzer.load_video(video_path)
             
-            progress_callback.update("Detecting chess board...", 0.2)
-            time.sleep(0.5)
+            progress_callback.update("Processing video...", 0.2)
             
-            progress_callback.update("Recognizing pieces...", 0.4)
-            time.sleep(0.5)
+            # Process video with progress updates
+            results = analyzer.process_video()
             
-            progress_callback.update("Tracking moves...", 0.6)
-            time.sleep(0.5)
-            
-            progress_callback.update("Validating game state...", 0.8)
-            time.sleep(0.5)
-            
-            progress_callback.update("Generating notation...", 0.9)
-            time.sleep(0.5)
-            
-            # Create mock results for demonstration
-            self._create_mock_results()
-            
-            processing_time = (datetime.now() - start_time).total_seconds()
-            self.processing_results.processing_time = processing_time
+            # Store results
+            self.processing_results.game_state = results.get('game_state')
+            self.processing_results.video_metadata = results.get('video_metadata')
+            self.processing_results.game_metadata = results.get('game_metadata')
+            self.processing_results.pgn_content = results.get('pgn_content')
+            self.processing_results.fen_sequence = results.get('fen_sequence')
+            self.processing_results.processing_time = results.get('processing_time')
             
             progress_callback.update("Processing complete!", 1.0)
             
@@ -462,7 +480,8 @@ class MainInterface:
         
         mock_game_state = GameState(
             current_position=mock_board_state,
-            move_history=mock_moves
+            move_history=mock_moves,
+            castling_rights=CastlingRights()
         )
         
         # Create mock metadata
@@ -507,16 +526,56 @@ class MainInterface:
         """
         self.status_var.set(message)
         self.progress_var.set(progress * 100)
+        self.percentage_var.set(f"{progress * 100:.1f}%")
         
-        # Update estimated time (simplified calculation)
-        if progress > 0.1 and hasattr(self, '_processing_start_time'):
+        # Update processing details based on progress
+        if progress <= 0.1:
+            self.details_var.set("Initializing video processing pipeline...")
+        elif progress <= 0.3:
+            self.details_var.set("Extracting frames and detecting chess board...")
+        elif progress <= 0.6:
+            self.details_var.set("Recognizing pieces and tracking movements...")
+        elif progress <= 0.8:
+            self.details_var.set("Validating moves and building game state...")
+        elif progress <= 0.95:
+            self.details_var.set("Generating PGN and FEN notation...")
+        else:
+            self.details_var.set("Finalizing results...")
+        
+        # Update estimated time with better calculation
+        if progress > 0.05 and hasattr(self, '_processing_start_time'):
             elapsed = (datetime.now() - self._processing_start_time).total_seconds()
-            estimated_total = elapsed / progress
-            remaining = estimated_total - elapsed
-            if remaining > 0:
-                self.time_var.set(f"Estimated time remaining: {remaining:.1f}s")
-        elif progress < 0.1:
+            
+            if progress > 0.95:
+                # Processing nearly complete
+                self.time_var.set("Almost done!")
+            else:
+                # Calculate remaining time
+                estimated_total = elapsed / progress
+                remaining = estimated_total - elapsed
+                
+                if remaining > 60:
+                    minutes = int(remaining // 60)
+                    seconds = int(remaining % 60)
+                    self.time_var.set(f"Estimated time remaining: {minutes}m {seconds}s")
+                elif remaining > 0:
+                    self.time_var.set(f"Estimated time remaining: {remaining:.0f}s")
+                else:
+                    self.time_var.set("Finishing up...")
+                    
+        elif progress <= 0.05:
+            # Just started
             self._processing_start_time = datetime.now()
+            self.time_var.set("Calculating time estimate...")
+        elif progress >= 1.0:
+            # Complete
+            if hasattr(self, '_processing_start_time'):
+                total_time = (datetime.now() - self._processing_start_time).total_seconds()
+                self.time_var.set(f"Completed in {total_time:.1f}s")
+                self.details_var.set("Processing completed successfully!")
+            else:
+                self.time_var.set("Processing complete!")
+                self.details_var.set("Ready for next video")
             self.time_var.set("Calculating estimated time...")
     
     def _processing_complete(self):
@@ -533,11 +592,25 @@ class MainInterface:
         if self.processing_results.game_state:
             self.error_correction.update_game_state(self.processing_results.game_state)
         
-        # Show completion message
+        # Show completion message with more details
         processing_time = self.processing_results.processing_time or 0
-        messagebox.showinfo("Processing Complete", 
-                          f"Video analysis completed successfully!\n"
-                          f"Processing time: {processing_time:.1f} seconds")
+        move_count = len(self.processing_results.game_state.move_history) if self.processing_results.game_state else 0
+        
+        if move_count > 0:
+            message = (f"Video analysis completed successfully!\n"
+                      f"Processing time: {processing_time:.1f} seconds\n"
+                      f"Detected moves: {move_count}")
+        else:
+            message = (f"Video analysis completed.\n"
+                      f"Processing time: {processing_time:.1f} seconds\n"
+                      f"No chess moves were detected in this video.\n\n"
+                      f"This could be due to:\n"
+                      f"• Video quality or lighting issues\n"
+                      f"• Chess board not clearly visible\n"
+                      f"• No actual moves made during recording\n"
+                      f"• Camera angle or distance problems")
+        
+        messagebox.showinfo("Processing Complete", message)
     
     def _processing_error(self, error_message: str):
         """
@@ -571,10 +644,14 @@ class MainInterface:
     
     def _display_results(self):
         """Display processing results in the UI."""
+        # Always show some results, even if no moves detected
         if not self.processing_results.game_state:
+            # Show message that no game state was created
+            self.moves_text.delete(1.0, tk.END)
+            self.moves_text.insert(1.0, "No game state detected. Processing may have failed.")
             return
         
-        # Display moves
+        # Display moves (even if empty)
         moves_text = self._format_moves_display(self.processing_results.game_state.move_history)
         self.moves_text.delete(1.0, tk.END)
         self.moves_text.insert(1.0, moves_text)
@@ -583,6 +660,9 @@ class MainInterface:
         if self.processing_results.pgn_content:
             self.pgn_text.delete(1.0, tk.END)
             self.pgn_text.insert(1.0, self.processing_results.pgn_content)
+        else:
+            self.pgn_text.delete(1.0, tk.END)
+            self.pgn_text.insert(1.0, "No PGN content generated.")
         
         # Display FEN
         if self.processing_results.fen_sequence:
@@ -590,10 +670,15 @@ class MainInterface:
                                  for i, fen in enumerate(self.processing_results.fen_sequence)])
             self.fen_text.delete(1.0, tk.END)
             self.fen_text.insert(1.0, fen_text)
+        else:
+            self.fen_text.delete(1.0, tk.END)
+            self.fen_text.insert(1.0, "No FEN sequence generated.")
         
-        # Enable export buttons
-        self.export_pgn_button.config(state="normal")
-        self.export_fen_button.config(state="normal")
+        # Enable export buttons only if we have content
+        if self.processing_results.pgn_content:
+            self.export_pgn_button.config(state="normal")
+        if self.processing_results.fen_sequence:
+            self.export_fen_button.config(state="normal")
         
         # Highlight problematic moves
         self.highlight_problematic_moves()
@@ -793,7 +878,8 @@ class MainInterface:
         # Create a temporary game state with only corrected moves
         temp_game_state = GameState(
             current_position=self.processing_results.game_state.current_position,
-            move_history=corrected_moves
+            move_history=corrected_moves,
+            castling_rights=self.processing_results.game_state.castling_rights
         )
         
         # Generate PGN for corrected moves

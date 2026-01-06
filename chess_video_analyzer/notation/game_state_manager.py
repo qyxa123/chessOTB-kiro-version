@@ -242,33 +242,36 @@ class GameStateManager:
             for y in range(8):
                 squares[Position(x, y)] = None
         
-        # Place white pieces (rank 1 and 2, y=0 and y=1)
-        squares[Position(0, 0)] = PieceType(Color.WHITE, PieceKind.ROOK)
-        squares[Position(1, 0)] = PieceType(Color.WHITE, PieceKind.KNIGHT)
-        squares[Position(2, 0)] = PieceType(Color.WHITE, PieceKind.BISHOP)
-        squares[Position(3, 0)] = PieceType(Color.WHITE, PieceKind.QUEEN)
-        squares[Position(4, 0)] = PieceType(Color.WHITE, PieceKind.KING)
-        squares[Position(5, 0)] = PieceType(Color.WHITE, PieceKind.BISHOP)
-        squares[Position(6, 0)] = PieceType(Color.WHITE, PieceKind.KNIGHT)
-        squares[Position(7, 0)] = PieceType(Color.WHITE, PieceKind.ROOK)
+        # Place white pieces (rank 1 and 2, y=7 and y=6)
+        # Note: y=7 corresponds to rank 1, y=0 corresponds to rank 8
+        squares[Position(0, 7)] = PieceType(Color.WHITE, PieceKind.ROOK)
+        squares[Position(1, 7)] = PieceType(Color.WHITE, PieceKind.KNIGHT)
+        squares[Position(2, 7)] = PieceType(Color.WHITE, PieceKind.BISHOP)
+        squares[Position(3, 7)] = PieceType(Color.WHITE, PieceKind.QUEEN)
+        squares[Position(4, 7)] = PieceType(Color.WHITE, PieceKind.KING)
+        squares[Position(5, 7)] = PieceType(Color.WHITE, PieceKind.BISHOP)
+        squares[Position(6, 7)] = PieceType(Color.WHITE, PieceKind.KNIGHT)
+        squares[Position(7, 7)] = PieceType(Color.WHITE, PieceKind.ROOK)
         
-        # White pawns (rank 2, y=1)
+        # White pawns (rank 2, y=6)
         for x in range(8):
-            squares[Position(x, 1)] = PieceType(Color.WHITE, PieceKind.PAWN)
+            squares[Position(x, 6)] = PieceType(Color.WHITE, PieceKind.PAWN)
         
-        # Place black pieces (rank 8 and 7, y=7 and y=6)
-        squares[Position(0, 7)] = PieceType(Color.BLACK, PieceKind.ROOK)
-        squares[Position(1, 7)] = PieceType(Color.BLACK, PieceKind.KNIGHT)
-        squares[Position(2, 7)] = PieceType(Color.BLACK, PieceKind.BISHOP)
-        squares[Position(3, 7)] = PieceType(Color.BLACK, PieceKind.QUEEN)
-        squares[Position(4, 7)] = PieceType(Color.BLACK, PieceKind.KING)
-        squares[Position(5, 7)] = PieceType(Color.BLACK, PieceKind.BISHOP)
-        squares[Position(6, 7)] = PieceType(Color.BLACK, PieceKind.KNIGHT)
-        squares[Position(7, 7)] = PieceType(Color.BLACK, PieceKind.ROOK)
+        # Place black pieces (rank 8 and 7, y=0 and y=1)
+        squares[Position(0, 0)] = PieceType(Color.BLACK, PieceKind.ROOK)
+        squares[Position(1, 0)] = PieceType(Color.BLACK, PieceKind.KNIGHT)
+        squares[Position(2, 0)] = PieceType(Color.BLACK, PieceKind.BISHOP)
+        squares[Position(3, 0)] = PieceType(Color.BLACK, PieceKind.QUEEN)
+        squares[Position(4, 0)] = PieceType(Color.BLACK, PieceKind.KING)
+        squares[Position(5, 0)] = PieceType(Color.BLACK, PieceKind.BISHOP)
+        squares[Position(6, 0)] = PieceType(Color.BLACK, PieceKind.KNIGHT)
+        squares[Position(7, 0)] = PieceType(Color.BLACK, PieceKind.ROOK)
         
-        # Black pawns (rank 7, y=6)
+        # Black pawns (rank 7, y=1)
         for x in range(8):
-            squares[Position(x, 6)] = PieceType(Color.BLACK, PieceKind.PAWN)
+            squares[Position(x, 1)] = PieceType(Color.BLACK, PieceKind.PAWN)
+        
+        return BoardState(squares=squares, timestamp=0.0, confidence=1.0)
         
         return BoardState(squares=squares, timestamp=0.0, confidence=1.0)
     
@@ -347,6 +350,154 @@ class GameStateManager:
         
         if current_piece.color != move.piece.color or current_piece.type != move.piece.type:
             return MoveValidationResult(False, f"Piece mismatch at {move.from_square.x},{move.from_square.y}")
+        
+        # Validate piece-specific movement rules
+        if not self._is_valid_piece_movement(move):
+            return MoveValidationResult(False, f"Invalid {move.piece.type.value} move from {self._position_to_algebraic(move.from_square)} to {self._position_to_algebraic(move.to_square)}")
+        
+        # Check if path is clear (except for knights)
+        if move.piece.type != PieceKind.KNIGHT and not self._is_path_clear_for_move(move):
+            return MoveValidationResult(False, f"Path blocked from {self._position_to_algebraic(move.from_square)} to {self._position_to_algebraic(move.to_square)}")
+        
+        # Check if destination square is valid
+        target_piece = self.game_state.current_position.squares.get(move.to_square)
+        if target_piece is not None and target_piece.color == move.piece.color:
+            return MoveValidationResult(False, f"Cannot capture own piece at {self._position_to_algebraic(move.to_square)}")
+        
+        return MoveValidationResult(True, "Valid move")
+    def _is_valid_piece_movement(self, move: Move) -> bool:
+        """
+        Validate that the move follows the rules for the specific piece type.
+        
+        Args:
+            move: The move to validate
+            
+        Returns:
+            True if the move is valid for this piece type
+        """
+        from_pos = move.from_square
+        to_pos = move.to_square
+        piece_type = move.piece.type
+        piece_color = move.piece.color
+        
+        # Calculate movement deltas
+        dx = to_pos.x - from_pos.x
+        dy = to_pos.y - from_pos.y
+        
+        if piece_type == PieceKind.PAWN:
+            return self._is_valid_pawn_move(move, dx, dy)
+        elif piece_type == PieceKind.ROOK:
+            return dx == 0 or dy == 0  # Horizontal or vertical only
+        elif piece_type == PieceKind.BISHOP:
+            return abs(dx) == abs(dy) and dx != 0  # Diagonal only
+        elif piece_type == PieceKind.QUEEN:
+            return (dx == 0 or dy == 0) or (abs(dx) == abs(dy) and dx != 0)  # Rook + Bishop
+        elif piece_type == PieceKind.KING:
+            return abs(dx) <= 1 and abs(dy) <= 1 and (dx != 0 or dy != 0)  # One square in any direction
+        elif piece_type == PieceKind.KNIGHT:
+            return (abs(dx) == 2 and abs(dy) == 1) or (abs(dx) == 1 and abs(dy) == 2)  # L-shape
+        
+        return False
+    
+    def _is_valid_pawn_move(self, move: Move, dx: int, dy: int) -> bool:
+        """
+        Validate pawn movement rules.
+        
+        Args:
+            move: The pawn move to validate
+            dx: Horizontal movement
+            dy: Vertical movement (positive = towards opponent)
+            
+        Returns:
+            True if the pawn move is valid
+        """
+        piece_color = move.piece.color
+        from_pos = move.from_square
+        to_pos = move.to_square
+        
+        # Determine direction based on color (white moves up the board, y decreases)
+        if piece_color == Color.WHITE:
+            forward_direction = -1  # White moves from y=6 to y=0 (rank 2 to rank 8)
+            starting_rank = 6  # White pawns start at y=6 (rank 2)
+        else:
+            forward_direction = 1   # Black moves from y=1 to y=7 (rank 7 to rank 1)
+            starting_rank = 1   # Black pawns start at y=1 (rank 7)
+        
+        # Check if moving in correct direction
+        if (dy * forward_direction) <= 0:
+            return False  # Pawns can't move backwards or sideways without capturing
+        
+        # Straight move (no capture)
+        if dx == 0:
+            target_piece = self.game_state.current_position.squares.get(to_pos)
+            if target_piece is not None:
+                return False  # Can't move forward if square is occupied
+            
+            # One square forward
+            if abs(dy) == 1:
+                return True
+            
+            # Two squares forward from starting position
+            if abs(dy) == 2 and from_pos.y == starting_rank:
+                return True
+            
+            return False
+        
+        # Diagonal capture
+        elif abs(dx) == 1 and abs(dy) == 1:
+            target_piece = self.game_state.current_position.squares.get(to_pos)
+            
+            # Regular capture
+            if target_piece is not None and target_piece.color != piece_color:
+                return True
+            
+            # En passant capture
+            if (target_piece is None and 
+                self.game_state.en_passant_target is not None and 
+                to_pos == self.game_state.en_passant_target):
+                return True
+            
+            return False
+        
+        return False
+    
+    def _is_path_clear_for_move(self, move: Move) -> bool:
+        """
+        Check if the path between two positions is clear of pieces.
+        
+        Args:
+            move: The move to check
+            
+        Returns:
+            True if path is clear (excluding start and end positions)
+        """
+        from_pos = move.from_square
+        to_pos = move.to_square
+        
+        dx = to_pos.x - from_pos.x
+        dy = to_pos.y - from_pos.y
+        
+        # No movement or adjacent squares - path is clear
+        if abs(dx) <= 1 and abs(dy) <= 1:
+            return True
+        
+        # Determine step direction
+        step_x = 0 if dx == 0 else (1 if dx > 0 else -1)
+        step_y = 0 if dy == 0 else (1 if dy > 0 else -1)
+        
+        # Check each square along the path (excluding start and end)
+        current_x = from_pos.x + step_x
+        current_y = from_pos.y + step_y
+        
+        while current_x != to_pos.x or current_y != to_pos.y:
+            check_pos = Position(current_x, current_y)
+            if self.game_state.current_position.squares.get(check_pos) is not None:
+                return False  # Path is blocked
+            
+            current_x += step_x
+            current_y += step_y
+        
+        return True
         
         # Check for invalid board positions
         if not self._is_valid_position(move.from_square):
@@ -1765,3 +1916,7 @@ class GameStateManager:
             temp_manager.game_state.active_color = Color.BLACK if temp_manager.game_state.active_color == Color.WHITE else Color.WHITE
         
         return algebraic_moves
+    
+    def get_current_game_state(self) -> GameState:
+        """Get the current game state."""
+        return self.game_state

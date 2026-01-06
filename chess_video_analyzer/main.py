@@ -10,9 +10,12 @@ import time
 from pathlib import Path
 from typing import Optional, List, Callable, Dict, Any
 from datetime import datetime
+import cv2
+import numpy as np
 
 from .video.processor import VideoProcessor, VideoProcessingError
 from .detection.board_detector import BoardDetector, BoardDetectionError
+from .detection.piece_recognizer import PieceRecognizer
 from .tracking.move_tracker import MoveTracker
 from .notation.game_state_manager import GameStateManager
 from .notation.pgn_generator import PGNGenerator
@@ -22,7 +25,8 @@ from .ui.main_interface import MainInterface
 from .ui.app_launcher import launch_application
 from .core.data_models import (
     VideoMetadata, GameMetadata, GameState, BoardState, Move,
-    Position, PieceType, Color, GameResult, BoardRegion, SquareGrid, Orientation
+    Position, PieceType, Color, GameResult, BoardRegion, SquareGrid, Orientation,
+    PieceKind, CastlingRights
 )
 
 
@@ -57,6 +61,7 @@ class ChessVideoAnalyzer:
         # Initialize core components
         self.video_processor = VideoProcessor()
         self.board_detector = BoardDetector()
+        self.piece_recognizer = PieceRecognizer()
         self.move_tracker = MoveTracker(confidence_threshold=confidence_threshold)
         self.game_state_manager = GameStateManager()
         self.pgn_generator = PGNGenerator()
@@ -278,24 +283,64 @@ class ChessVideoAnalyzer:
             raise ProcessingError(f"Frame extraction failed: {e}") from e
     
     def _create_board_state_from_frame(self, frame, square_grid, timestamp: float) -> BoardState:
-        """Create a board state from a frame (simplified implementation)."""
-        # This is a simplified implementation for demonstration
-        # In a full implementation, this would use piece recognition
-        
+        """Create a board state from a frame with basic piece detection."""
         squares = {}
-        for position in square_grid.squares:
-            # For now, set all squares to None (empty)
-            # In full implementation, would recognize pieces here
-            squares[position] = None
         
-        # Create mock board state with reasonable confidence
-        # Use a default confidence that can be overridden by tests
-        default_confidence = getattr(self, '_test_confidence', 0.85)
+        # Basic piece detection using color and texture analysis
+        for position in square_grid.squares:
+            piece = self._detect_piece_in_square(frame, square_grid, position)
+            squares[position] = piece
+        
+        # Calculate confidence based on detection quality
+        confidence = self._calculate_board_confidence(squares, frame)
+        
         return BoardState(
             squares=squares,
             timestamp=timestamp,
-            confidence=default_confidence
+            confidence=confidence
         )
+    
+    def _detect_piece_in_square(self, frame, square_grid, position: Position) -> Optional[PieceType]:
+        """Detect if there's a piece in a specific square using proper piece recognition."""
+        try:
+            # Get square coordinates
+            if position not in square_grid.squares:
+                return None
+            
+            x1, y1, x2, y2 = square_grid.squares[position]
+            
+            # Extract square region from frame
+            square_region = frame[int(y1):int(y2), int(x1):int(x2)]
+            
+            if square_region.size == 0:
+                return None
+            
+            # Use the proper piece recognizer instead of basic detection
+            piece_type = self.piece_recognizer.classify_piece(square_region)
+            
+            return piece_type
+            
+        except Exception as e:
+            self.logger.debug(f"Error detecting piece at {position}: {e}")
+            return None
+    
+    def _calculate_board_confidence(self, squares: Dict[Position, Optional[PieceType]], frame) -> float:
+        """Calculate confidence score for the board state."""
+        try:
+            # Count detected pieces
+            piece_count = sum(1 for piece in squares.values() if piece is not None)
+            
+            # Basic confidence calculation
+            # More pieces detected = higher confidence (up to a reasonable limit)
+            if piece_count == 0:
+                return 0.3  # Low confidence if no pieces detected
+            elif piece_count < 10:
+                return 0.5 + (piece_count * 0.03)  # Gradually increase confidence
+            else:
+                return 0.8  # High confidence if many pieces detected
+                
+        except Exception:
+            return 0.5  # Default confidence
     
     def _detect_moves_from_states(self, board_states: List[BoardState]) -> List[Move]:
         """Detect moves by comparing consecutive board states."""
@@ -307,6 +352,11 @@ class ChessVideoAnalyzer:
         
         self.logger.info(f"Detecting moves from {len(board_states)} board states")
         
+        # Initialize game state with the first detected board state instead of standard position
+        if board_states:
+            self.game_state_manager.set_custom_starting_position(board_states[0])
+            self.logger.info("Initialized game state with first detected board position")
+        
         for i in range(1, len(board_states)):
             previous_state = board_states[i - 1]
             current_state = board_states[i]
@@ -316,25 +366,109 @@ class ChessVideoAnalyzer:
                 move = self.move_tracker.detect_move(previous_state, current_state)
                 
                 if move:
+                    # RELAXED: Try to validate move, but be more permissive
+                    validation_result = self.game_state_manager.validate_move(move)
+                    
+                    if validation_result.is_legal:
+                        # Accept legal moves
+                        moves.append(move)
+                        self.logger.debug(f"Accepted legal move {len(moves)}: {move.piece.type.value} "
+                                        f"{move.from_square.x},{move.from_square.y} -> "
+                                        f"{move.to_square.x},{move.to_square.y}")
+                        
+                        # Update game state for next validation
+                        new_board_state = self._apply_move_to_board_state(current_state, move)
+                        self.game_state_manager.update_state(move, new_board_state)
+                    else:
+                        # For now, be more permissive - accept moves that look reasonable
+                        # even if they don't pass strict validation
+                        if self._is_reasonable_move(move, previous_state, current_state):
+                            move.is_flagged = True
+                            move.flag_reason = f"Validation failed: {validation_result.reason}"
+                            moves.append(move)
+                            self.logger.warning(f"Accepted flagged move: {move.piece.type.value} "
+                                              f"{move.from_square.x},{move.from_square.y} -> "
+                                              f"{move.to_square.x},{move.to_square.y} - {validation_result.reason}")
+                            
+                            # Update game state with the actual board state
+                            self.game_state_manager.update_state(move, current_state)
+                        else:
+                            # Log rejected illegal moves
+                            self.logger.warning(f"Rejected illegal move: {move.piece.type.value} "
+                                              f"{move.from_square.x},{move.from_square.y} -> "
+                                              f"{move.to_square.x},{move.to_square.y} - {validation_result.reason}")
+                
                     # Assess move quality if enabled
-                    if self.quality_controller:
+                    if self.quality_controller and move:
                         quality_issues = self.quality_controller.assess_move_quality(
                             move, previous_state, current_state, i, current_state.timestamp
                         )
                         if quality_issues:
-                            self.logger.debug(f"Move {len(moves) + 1}: {len(quality_issues)} quality issues")
-                    
-                    moves.append(move)
-                    self.logger.debug(f"Detected move {len(moves)}: {move.piece.type.value} "
-                                    f"{move.from_square.x},{move.from_square.y} -> "
-                                    f"{move.to_square.x},{move.to_square.y}")
+                            self.logger.debug(f"Move {len(moves)}: {len(quality_issues)} quality issues")
                 
             except Exception as e:
                 self.logger.warning(f"Move detection failed between frames {i-1} and {i}: {e}")
                 continue
         
-        self.logger.info(f"Detected {len(moves)} moves")
+        self.logger.info(f"Detected {len(moves)} moves ({sum(1 for m in moves if not m.is_flagged)} legal, {sum(1 for m in moves if m.is_flagged)} flagged)")
         return moves
+    
+    def _is_reasonable_move(self, move: Move, previous_state: BoardState, current_state: BoardState) -> bool:
+        """
+        Check if a move is reasonable even if it doesn't pass strict validation.
+        This is more permissive than full chess rule validation.
+        """
+        try:
+            # Basic sanity checks
+            if move.from_square == move.to_square:
+                return False
+            
+            # Check if the move distance is reasonable (not across the entire board)
+            dx = abs(move.to_square.x - move.from_square.x)
+            dy = abs(move.to_square.y - move.from_square.y)
+            max_distance = max(dx, dy)
+            
+            if max_distance > 7:  # Can't move more than 7 squares in any direction
+                return False
+            
+            # Check if there was actually a piece at the source in the previous state
+            source_piece = previous_state.squares.get(move.from_square)
+            if source_piece is None:
+                return False
+            
+            # Check if the piece colors match (allowing for some detection uncertainty)
+            if source_piece.color != move.piece.color:
+                return False
+            
+            # Check if the destination changed between states
+            prev_dest = previous_state.squares.get(move.to_square)
+            curr_dest = current_state.squares.get(move.to_square)
+            
+            # There should be some change at the destination
+            if prev_dest == curr_dest and curr_dest != move.piece:
+                return False
+            
+            return True
+            
+        except Exception as e:
+            self.logger.debug(f"Error in reasonable move check: {e}")
+            return False
+    
+    def _apply_move_to_board_state(self, board_state: BoardState, move: Move) -> BoardState:
+        """Apply a move to create a new board state."""
+        new_squares = board_state.squares.copy()
+        
+        # Remove piece from source square
+        new_squares[move.from_square] = None
+        
+        # Place piece on destination square
+        new_squares[move.to_square] = move.piece
+        
+        return BoardState(
+            squares=new_squares,
+            timestamp=board_state.timestamp,
+            confidence=board_state.confidence
+        )
     
     def _build_final_game_state(self, moves: List[Move], board_states: List[BoardState]) -> GameState:
         """Build the final game state from detected moves."""

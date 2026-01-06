@@ -63,54 +63,153 @@ class MoveTracker:
         
         # Find all position changes
         changes = []
+        disappeared_pieces = []  # (position, piece)
+        appeared_pieces = []     # (position, piece)
+        
         for pos in previous_state.squares:
             prev_piece = previous_state.squares.get(pos)
             curr_piece = current_state.squares.get(pos)
+            
             if prev_piece != curr_piece:
                 changes.append((pos, prev_piece, curr_piece))
+                
+                if prev_piece is not None and curr_piece is None:
+                    disappeared_pieces.append((pos, prev_piece))
+                elif prev_piece is None and curr_piece is not None:
+                    appeared_pieces.append((pos, curr_piece))
         
-        # Count total pieces for debugging
-        prev_total = sum(1 for p in previous_state.squares.values() if p is not None)
-        curr_total = sum(1 for p in current_state.squares.values() if p is not None)
-        
-        # Analyze the changes to determine the move
-        if len(changes) == 1:
-            # Single position changed - this could be a piece appearing, disappearing, or changing type
-            pos, prev_piece, curr_piece = changes[0]
-            if prev_piece is None and curr_piece is not None:
-                # Piece appeared - need to find where it came from
-                return self._find_move_for_appeared_piece(pos, curr_piece, previous_state, current_state)
-            elif prev_piece is not None and curr_piece is None:
-                # Piece disappeared - need to find where it went
-                return self._find_move_for_disappeared_piece(pos, prev_piece, previous_state, current_state)
-            else:
-                # Piece changed type - this could be promotion
-                return self._handle_piece_type_change(pos, prev_piece, curr_piece, previous_state, current_state)
-        
-        elif len(changes) == 0:
-            # No position changes detected, but pieces might have moved to capture identical pieces
-            # Check if total piece count decreased (indicating a capture)
-            prev_total = sum(1 for p in previous_state.squares.values() if p is not None)
-            curr_total = sum(1 for p in current_state.squares.values() if p is not None)
+        # Simple move detection: one piece disappeared, one appeared
+        if len(disappeared_pieces) == 1 and len(appeared_pieces) == 1:
+            from_pos, piece = disappeared_pieces[0]
+            to_pos, moved_piece = appeared_pieces[0]
             
-            if prev_total > curr_total:
-                # A piece was captured - try to find the move
-                return self._find_identical_piece_capture(previous_state, current_state)
-            
-            # Also check for identical piece captures even if total count is the same
-            # This handles cases where the test generator creates scenarios with identical pieces
-            return self._find_identical_piece_capture(previous_state, current_state)
+            # Check if it's the same piece (or similar enough)
+            if self._pieces_match(piece, moved_piece):
+                # Create the move
+                captured_piece = previous_state.squares.get(to_pos)
+                
+                move = Move(
+                    from_square=from_pos,
+                    to_square=to_pos,
+                    piece=piece,
+                    captured_piece=captured_piece
+                )
+                
+                # Only do basic legality check here, not full chess rules
+                if self._is_basic_legal_move(from_pos, to_pos, piece, previous_state):
+                    self.move_history.append(move)
+                    return move
         
-        elif len(changes) == 2:
-            # Two positions changed - this is likely a simple move
+        # Handle more complex cases
+        if len(changes) == 2:
             return self._handle_two_position_change(changes, previous_state, current_state)
-        
         elif len(changes) > 2:
-            # Multiple positions changed - could be castling or complex scenario
             return self._handle_multiple_position_changes(changes, previous_state, current_state)
         
-        # No changes detected
         return None
+    
+    def _pieces_match(self, piece1: PieceType, piece2: PieceType) -> bool:
+        """Check if two pieces are the same (allowing for some detection uncertainty)."""
+        if piece1 is None or piece2 is None:
+            return piece1 == piece2
+        
+        # Check both color and type match (more strict than before)
+        return piece1.color == piece2.color and piece1.type == piece2.type
+    
+    def _is_legal_move(self, from_pos: Position, to_pos: Position, piece: PieceType, board_state: BoardState) -> bool:
+        """
+        Check if a move is legal according to chess rules.
+        
+        Args:
+            from_pos: Starting position
+            to_pos: Ending position  
+            piece: The piece being moved
+            board_state: Current board state
+            
+        Returns:
+            True if the move is legal for this piece type
+        """
+        # Calculate movement deltas
+        dx = to_pos.x - from_pos.x
+        dy = to_pos.y - from_pos.y
+        
+        # No movement is not a valid move
+        if dx == 0 and dy == 0:
+            return False
+        
+        # Check piece-specific movement rules
+        if piece.type == PieceKind.PAWN:
+            return self._is_legal_pawn_move(from_pos, to_pos, piece, board_state, dx, dy)
+        elif piece.type == PieceKind.ROOK:
+            return (dx == 0 or dy == 0) and self._is_path_clear_simple(from_pos, to_pos, board_state)
+        elif piece.type == PieceKind.BISHOP:
+            return (abs(dx) == abs(dy)) and self._is_path_clear_simple(from_pos, to_pos, board_state)
+        elif piece.type == PieceKind.QUEEN:
+            return ((dx == 0 or dy == 0) or (abs(dx) == abs(dy))) and self._is_path_clear_simple(from_pos, to_pos, board_state)
+        elif piece.type == PieceKind.KING:
+            return abs(dx) <= 1 and abs(dy) <= 1
+        elif piece.type == PieceKind.KNIGHT:
+            return (abs(dx) == 2 and abs(dy) == 1) or (abs(dx) == 1 and abs(dy) == 2)
+        
+        return False
+    
+    def _is_legal_pawn_move(self, from_pos: Position, to_pos: Position, piece: PieceType, 
+                           board_state: BoardState, dx: int, dy: int) -> bool:
+        """Check if a pawn move is legal."""
+        # Determine direction based on color
+        if piece.color == Color.WHITE:
+            forward_direction = -1  # White moves up (y decreases)
+            starting_rank = 6  # White pawns start at y=6
+        else:
+            forward_direction = 1   # Black moves down (y increases)  
+            starting_rank = 1   # Black pawns start at y=1
+        
+        # Check if moving in correct direction
+        if (dy * forward_direction) <= 0:
+            return False
+        
+        # Straight move (no capture)
+        if dx == 0:
+            # One square forward
+            if abs(dy) == 1:
+                return board_state.squares.get(to_pos) is None
+            # Two squares forward from starting position
+            elif abs(dy) == 2 and from_pos.y == starting_rank:
+                return (board_state.squares.get(to_pos) is None and 
+                       board_state.squares.get(Position(from_pos.x, from_pos.y + forward_direction)) is None)
+            return False
+        
+        # Diagonal capture
+        elif abs(dx) == 1 and abs(dy) == 1:
+            target_piece = board_state.squares.get(to_pos)
+            return target_piece is not None and target_piece.color != piece.color
+        
+        return False
+    
+    def _is_path_clear_simple(self, from_pos: Position, to_pos: Position, board_state: BoardState) -> bool:
+        """Check if path between positions is clear (simplified version)."""
+        dx = to_pos.x - from_pos.x
+        dy = to_pos.y - from_pos.y
+        
+        # Adjacent squares - path is clear
+        if abs(dx) <= 1 and abs(dy) <= 1:
+            return True
+        
+        # Determine step direction
+        step_x = 0 if dx == 0 else (1 if dx > 0 else -1)
+        step_y = 0 if dy == 0 else (1 if dy > 0 else -1)
+        
+        # Check each square along the path (excluding start and end)
+        current_x = from_pos.x + step_x
+        current_y = from_pos.y + step_y
+        
+        while current_x != to_pos.x or current_y != to_pos.y:
+            if board_state.squares.get(Position(current_x, current_y)) is not None:
+                return False  # Path is blocked
+            current_x += step_x
+            current_y += step_y
+        
+        return True
     
     def _find_move_for_appeared_piece(self, to_pos: Position, piece: PieceType, 
                                     previous_state: BoardState, current_state: BoardState) -> Optional[Move]:
@@ -1124,3 +1223,46 @@ class MoveTracker:
             return None
         
         return promoted_piece.type
+    def _is_basic_legal_move(self, from_pos: Position, to_pos: Position, piece: PieceType, board_state: BoardState) -> bool:
+        """
+        Basic move legality check - less strict than full chess rules.
+        Just checks basic sanity, not full chess rule compliance.
+        """
+        # Calculate movement deltas
+        dx = to_pos.x - from_pos.x
+        dy = to_pos.y - from_pos.y
+        
+        # No movement is not a valid move
+        if dx == 0 and dy == 0:
+            return False
+        
+        # Can't move more than 7 squares in any direction
+        if abs(dx) > 7 or abs(dy) > 7:
+            return False
+        
+        # Can't capture own piece
+        target_piece = board_state.squares.get(to_pos)
+        if target_piece is not None and target_piece.color == piece.color:
+            return False
+        
+        # Basic piece movement patterns (relaxed)
+        if piece.type == PieceKind.PAWN:
+            # Pawns can move forward or diagonally (relaxed - don't check direction strictly)
+            return abs(dx) <= 1 and abs(dy) <= 2
+        elif piece.type == PieceKind.ROOK:
+            # Rooks move in straight lines
+            return dx == 0 or dy == 0
+        elif piece.type == PieceKind.BISHOP:
+            # Bishops move diagonally
+            return abs(dx) == abs(dy)
+        elif piece.type == PieceKind.QUEEN:
+            # Queens move like rooks or bishops
+            return (dx == 0 or dy == 0) or (abs(dx) == abs(dy))
+        elif piece.type == PieceKind.KING:
+            # Kings move one square in any direction
+            return abs(dx) <= 1 and abs(dy) <= 1
+        elif piece.type == PieceKind.KNIGHT:
+            # Knights move in L-shape
+            return (abs(dx) == 2 and abs(dy) == 1) or (abs(dx) == 1 and abs(dy) == 2)
+        
+        return True  # Default to allowing the move
